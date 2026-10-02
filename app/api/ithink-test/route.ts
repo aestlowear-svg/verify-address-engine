@@ -7,56 +7,45 @@ export async function GET() {
 
     if (!accessToken || !secretKey) {
       return NextResponse.json(
-        { ok: false, error: "iThink credentials are not configured" },
+        {
+          ok: false,
+          error: "iThink credentials are not configured",
+        },
         { status: 500 }
       );
     }
 
-const candidates = ["11154820338842"];
-
-    const results = [];
-
-    for (const orderNo of candidates) {
-      const response = await fetch(
-        "https://my.ithinklogistics.com/api_v3/store/get-order-details.json",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Cache-Control": "no-cache",
+    const response = await fetch(
+      "https://my.ithinklogistics.com/api_v3/store/get-order-list.json",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+        },
+        body: JSON.stringify({
+          data: {
+            platform_id: 2,
+            start_date: "2026-10-01",
+            end_date: "2026-10-02",
+            access_token: accessToken,
+            secret_key: secretKey,
           },
-          body: JSON.stringify({
-            data: {
-              order_no_list: orderNo,
-              platform_id: 2,
-              access_token: accessToken,
-              secret_key: secretKey,
-            },
-          }),
-        }
-      );
+        }),
+      }
+    );
 
-      const data = await response.json();
-
-    results.push({
-  tested: orderNo,
-  httpStatus: response.status,
-  ithinkStatus: data.status ?? null,
-  statusCode: data.status_code ?? null,
-  found:
-    data.status === "success" &&
-    data.data &&
-    Object.keys(data.data).length > 0,
-  response: data,
-});
-    }
+    const data = await response.json();
 
     return NextResponse.json({
-      ok: true,
-      results,
+      ok: response.ok,
+      httpStatus: response.status,
+      ithinkStatus: data.status ?? null,
+      statusCode: data.status_code ?? null,
+      orders: data.data ?? null,
     });
   } catch (error) {
-    console.error("iThink diagnostic error:", error);
+    console.error("iThink order list error:", error);
 
     return NextResponse.json(
       {
