@@ -12,7 +12,7 @@ export async function GET() {
       );
     }
 
-    const candidates = ["4623", "AS4623", "#AS4623"];
+ const candidates = ["93960566"];
 
     const results = [];
 
