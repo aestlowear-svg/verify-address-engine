@@ -7,69 +7,55 @@ export async function GET() {
 
     if (!accessToken || !secretKey) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: "iThink credentials are not configured",
-        },
+        { ok: false, error: "iThink credentials are not configured" },
         { status: 500 }
       );
     }
 
-    const response = await fetch(
-      "https://my.ithinklogistics.com/api_v3/store/get-order-details.json",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-cache",
-        },
-        body: JSON.stringify({
-          data: {
-            order_no_list: "4623",
-            platform_id: 2,
-            access_token: accessToken,
-            secret_key: secretKey,
-          },
-        }),
-      }
-    );
+    const candidates = ["4623", "AS4623", "#AS4623"];
 
-    const data = await response.json();
+    const results = [];
 
-    if (!response.ok) {
-      return NextResponse.json(
+    for (const orderNo of candidates) {
+      const response = await fetch(
+        "https://my.ithinklogistics.com/api_v3/store/get-order-details.json",
         {
-          ok: false,
-          error: "iThink API request failed",
-          status: response.status,
-        },
-        { status: response.status }
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache",
+          },
+          body: JSON.stringify({
+            data: {
+              order_no_list: orderNo,
+              platform_id: 2,
+              access_token: accessToken,
+              secret_key: secretKey,
+            },
+          }),
+        }
       );
+
+      const data = await response.json();
+
+      results.push({
+        tested: orderNo,
+        httpStatus: response.status,
+        ithinkStatus: data.status ?? null,
+        statusCode: data.status_code ?? null,
+        found:
+          data.status === "success" &&
+          data.data &&
+          Object.keys(data.data).length > 0,
+      });
     }
 
     return NextResponse.json({
       ok: true,
-
-      // Only expose the fields we actually need for testing.
-      ithinkStatus: data.status ?? null,
-
-      order: data.data?.["4623"]
-        ? {
-            orderNumber: data.data["4623"].order_number ?? null,
-            customerAddress1:
-              data.data["4623"].customer_address1 ?? null,
-            customerAddress2:
-              data.data["4623"].customer_address2 ?? null,
-            city: data.data["4623"].customer_city ?? null,
-            state: data.data["4623"].customer_state ?? null,
-            pincode: data.data["4623"].customer_pincode ?? null,
-          }
-        : null,
-
-      rawStatusCode: data.status_code ?? null,
+      results,
     });
   } catch (error) {
-    console.error("iThink test error:", error);
+    console.error("iThink diagnostic error:", error);
 
     return NextResponse.json(
       {
