@@ -38,16 +38,17 @@ const candidates = ["11154820338842"];
 
       const data = await response.json();
 
-      results.push({
-        tested: orderNo,
-        httpStatus: response.status,
-        ithinkStatus: data.status ?? null,
-        statusCode: data.status_code ?? null,
-        found:
-          data.status === "success" &&
-          data.data &&
-          Object.keys(data.data).length > 0,
-      });
+    results.push({
+  tested: orderNo,
+  httpStatus: response.status,
+  ithinkStatus: data.status ?? null,
+  statusCode: data.status_code ?? null,
+  found:
+    data.status === "success" &&
+    data.data &&
+    Object.keys(data.data).length > 0,
+  response: data,
+});
     }
 
     return NextResponse.json({
