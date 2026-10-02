@@ -15,12 +15,11 @@ export async function GET() {
       );
     }
 
-    const candidates = [
-      "11154672156966",
-      "11154820333862",
-      "1115538659814",
-      "11156903133478",
-    ];
+   const candidates = [
+  "4621",
+  "4622",
+  "4624",
+];
 
     const results = [];
 
