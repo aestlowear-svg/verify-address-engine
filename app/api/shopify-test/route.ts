@@ -64,7 +64,6 @@ export async function GET() {
           nodes {
             id
             name
-            orderNumber
             createdAt
             displayFinancialStatus
             displayFulfillmentStatus
