@@ -15,8 +15,10 @@ export async function GET() {
       );
     }
 
+    const orderNo = "11154820333862";
+
     const response = await fetch(
-      "https://my.ithinklogistics.com/api_v3/store/get-order-list.json",
+      "https://my.ithinklogistics.com/api_v3/store/get-order-details.json",
       {
         method: "POST",
         headers: {
@@ -25,9 +27,8 @@ export async function GET() {
         },
         body: JSON.stringify({
           data: {
+            order_no_list: orderNo,
             platform_id: 2,
-            start_date: "2026-10-01",
-            end_date: "2026-10-02",
             access_token: accessToken,
             secret_key: secretKey,
           },
@@ -39,13 +40,14 @@ export async function GET() {
 
     return NextResponse.json({
       ok: response.ok,
+      tested: orderNo,
       httpStatus: response.status,
       ithinkStatus: data.status ?? null,
       statusCode: data.status_code ?? null,
-      orders: data.data ?? null,
+      response: data,
     });
   } catch (error) {
-    console.error("iThink order list error:", error);
+    console.error("iThink order details error:", error);
 
     return NextResponse.json(
       {
