@@ -1,259 +1,344 @@
+import { NextResponse } from "next/server";
 import crypto from "crypto";
-import { after, NextResponse } from "next/server";
 
-function verifyShopifyWebhook(
+function verifyShopifyHmac(
   rawBody: string,
-  hmacHeader: string | null,
+  hmacHeader: string,
   secret: string
 ): boolean {
-  if (!hmacHeader) {
-    return false;
-  }
-
-  const generatedHmac = crypto
+  const digest = crypto
     .createHmac("sha256", secret)
     .update(rawBody, "utf8")
     .digest("base64");
 
-  const receivedBuffer = Buffer.from(hmacHeader, "utf8");
-  const generatedBuffer = Buffer.from(generatedHmac, "utf8");
+  const digestBuffer =
+    Buffer.from(digest, "utf8");
 
-  if (receivedBuffer.length !== generatedBuffer.length) {
+  const hmacBuffer =
+    Buffer.from(hmacHeader, "utf8");
+
+  if (
+    digestBuffer.length !==
+    hmacBuffer.length
+  ) {
     return false;
   }
 
   return crypto.timingSafeEqual(
-    receivedBuffer,
-    generatedBuffer
+    digestBuffer,
+    hmacBuffer
   );
 }
 
-export async function POST(request: Request) {
+export async function POST(
+  request: Request
+) {
   try {
     /*
-     * IMPORTANT:
-     * Read the RAW body first.
+     * ==================================================
+     * 1. READ RAW SHOPIFY WEBHOOK
+     * ==================================================
      *
-     * Shopify HMAC verification must use the raw webhook body.
+     * IMPORTANT:
+     * HMAC must be calculated from the raw request body.
      */
-    const rawBody = await request.text();
 
-    const hmac = request.headers.get(
-      "x-shopify-hmac-sha256"
-    );
+    const rawBody =
+      await request.text();
 
-    const shop = request.headers.get(
-      "x-shopify-shop-domain"
-    );
+    const hmac =
+      request.headers.get(
+        "x-shopify-hmac-sha256"
+      );
 
-    const topic = request.headers.get(
-      "x-shopify-topic"
-    );
+    const shop =
+      request.headers.get(
+        "x-shopify-shop-domain"
+      );
 
-    const webhookId = request.headers.get(
-      "x-shopify-webhook-id"
-    );
+    const topic =
+      request.headers.get(
+        "x-shopify-topic"
+      );
 
-    const webhookSecret =
+    const webhookId =
+      request.headers.get(
+        "x-shopify-webhook-id"
+      );
+
+    if (
+      !hmac ||
+      !shop ||
+      !topic
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Missing Shopify webhook headers",
+        },
+        { status: 400 }
+      );
+    }
+
+    /*
+     * ==================================================
+     * 2. VERIFY SHOP
+     * ==================================================
+     */
+
+    const expectedShop =
+      `${process.env.SHOPIFY_SHOP}.myshopify.com`;
+
+    if (
+      shop !== expectedShop
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Invalid Shopify shop",
+        },
+        { status: 401 }
+      );
+    }
+
+    /*
+     * ==================================================
+     * 3. VERIFY SHOPIFY HMAC
+     * ==================================================
+     */
+
+    const clientSecret =
       process.env.SHOPIFY_CLIENT_SECRET;
 
-    if (!webhookSecret) {
+    if (!clientSecret) {
       console.error(
-        "SHOPIFY_CLIENT_SECRET is not configured"
+        "SHOPIFY_CLIENT_SECRET is missing"
       );
 
       return NextResponse.json(
         {
           ok: false,
-          error: "Webhook secret is not configured",
+          error:
+            "Shopify client secret is not configured",
         },
         { status: 500 }
       );
     }
 
-    /*
-     * 1. Verify HMAC
-     */
-    const validHmac = verifyShopifyWebhook(
-      rawBody,
-      hmac,
-      webhookSecret
-    );
+    const validHmac =
+      verifyShopifyHmac(
+        rawBody,
+        hmac,
+        clientSecret
+      );
 
     if (!validHmac) {
-      console.error(
-        "Invalid Shopify webhook HMAC"
-      );
-
       return NextResponse.json(
         {
           ok: false,
-          error: "Invalid webhook signature",
+          error:
+            "Invalid Shopify webhook signature",
         },
         { status: 401 }
       );
     }
 
     /*
-     * 2. Verify the Shopify shop
+     * ==================================================
+     * 4. ONLY PROCESS ORDER WEBHOOKS
+     * ==================================================
      */
-    const expectedShop =
-      `${process.env.SHOPIFY_SHOP}.myshopify.com`;
 
-    if (!shop || shop !== expectedShop) {
-      console.error(
-        "Unexpected Shopify shop:",
-        shop
-      );
-
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "Unexpected Shopify shop",
-        },
-        { status: 401 }
-      );
-    }
-
-    /*
-     * 3. Only process order creation/update webhooks.
-     */
     const allowedTopics = [
       "orders/create",
       "orders/updated",
     ];
 
     if (
-      !topic ||
       !allowedTopics.includes(topic)
     ) {
       return NextResponse.json({
         ok: true,
+        received: true,
         ignored: true,
-        reason: "TOPIC_NOT_USED",
+        reason:
+          "TOPIC_NOT_USED",
         topic,
       });
     }
 
     /*
-     * 4. Parse the webhook body.
+     * ==================================================
+     * 5. READ PAYLOAD
+     * ==================================================
      */
-    let body: any;
+
+    let payload: any;
 
     try {
-      body = JSON.parse(rawBody);
+      payload =
+        JSON.parse(rawBody);
     } catch {
       return NextResponse.json(
         {
           ok: false,
-          error: "Invalid JSON payload",
+          error:
+            "Invalid JSON payload",
         },
         { status: 400 }
       );
     }
 
     /*
-     * Shopify order webhook payload normally contains
-     * the numeric order ID.
+     * ==================================================
+     * 6. GET SHOPIFY ORDER ID
+     * ==================================================
+     *
+     * Shopify webhook payloads normally include
+     * admin_graphql_api_id.
+     *
+     * We prefer that because our processor uses
+     * Shopify GraphQL IDs.
      */
-    const numericOrderId =
-      body?.id;
 
-    if (!numericOrderId) {
+    const orderId =
+      payload?.admin_graphql_api_id ||
+      (
+        payload?.id
+          ? `gid://shopify/Order/${payload.id}`
+          : null
+      );
+
+    if (!orderId) {
       console.error(
-        "Shopify webhook did not contain order ID"
+        "Shopify webhook has no order ID",
+        {
+          topic,
+          webhookId,
+        }
       );
 
       return NextResponse.json(
         {
           ok: false,
-          error: "Order ID missing",
+          error:
+            "Order ID not found in webhook",
         },
         { status: 400 }
       );
     }
 
-    const orderId =
-      `gid://shopify/Order/${numericOrderId}`;
+    /*
+     * ==================================================
+     * 7. INTERNAL PROCESSOR SECRET
+     * ==================================================
+     */
+
+    const internalSecret =
+      process.env.INTERNAL_PROCESSOR_SECRET;
+
+    if (!internalSecret) {
+      console.error(
+        "INTERNAL_PROCESSOR_SECRET is missing"
+      );
+
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Internal processor secret is not configured",
+        },
+        { status: 500 }
+      );
+    }
 
     /*
-     * 5. Process AFTER acknowledging Shopify.
-     *
-     * This keeps the webhook response fast.
-     *
-     * The processor itself performs all safety checks
-     * against the CURRENT Shopify order.
+     * ==================================================
+     * 8. CALL ADDRESS PROCESSOR
+     * ==================================================
      */
-    after(async () => {
-      try {
-        const baseUrl =
-          process.env.VERCEL_URL
-            ? `https://${process.env.VERCEL_URL}`
-            : new URL(request.url).origin;
 
-        const processorSecret =
-          process.env.INTERNAL_PROCESSOR_SECRET;
+    const processorUrl =
+      new URL(
+        "/api/shopify-process-test",
+        request.url
+      ).toString();
 
-        if (!processorSecret) {
-          console.error(
-            "INTERNAL_PROCESSOR_SECRET is not configured"
-          );
+    const processorResponse =
+      await fetch(
+        processorUrl,
+        {
+          method: "POST",
 
-          return;
-        }
+          headers: {
+            "Content-Type":
+              "application/json",
 
-        const response = await fetch(
-          `${baseUrl}/api/shopify-process-test`,
-          {
-            method: "POST",
+            "x-internal-processor-secret":
+              internalSecret,
+          },
 
-            headers: {
-              "Content-Type":
-                "application/json",
-
-              "X-Internal-Processor-Secret":
-                processorSecret,
-            },
-
-            body: JSON.stringify({
-              orderId,
-              webhookId,
-              topic,
-            }),
-          }
-        );
-
-        const result =
-          await response.text();
-
-        console.log(
-          "Shopify address processor result:",
-          {
+          body: JSON.stringify({
             orderId,
-            webhookId,
-            topic,
-            status: response.status,
-            result,
-          }
-        );
-      } catch (error) {
-        console.error(
-          "Shopify webhook processor error:",
-          error
-        );
-      }
-    });
+          }),
+        }
+      );
+
+    const processorData =
+      await processorResponse.json();
 
     /*
-     * 6. Acknowledge Shopify immediately.
+     * ==================================================
+     * 9. LOG RESULT
+     * ==================================================
      */
+
+    console.log(
+      "Shopify address webhook processed:",
+      {
+        topic,
+        shop,
+        webhookId,
+        orderId,
+        processorStatus:
+          processorResponse.status,
+        decision:
+          processorData?.decision,
+        reason:
+          processorData?.reason,
+      }
+    );
+
+    /*
+     * ==================================================
+     * 10. RETURN SUCCESS TO SHOPIFY
+     * ==================================================
+     */
+
     return NextResponse.json({
       ok: true,
       received: true,
-      queued: true,
+
       topic,
+      shop,
       webhookId,
+
       orderId,
+
+      processor: {
+        status:
+          processorResponse.status,
+
+        decision:
+          processorData?.decision ||
+          null,
+
+        reason:
+          processorData?.reason ||
+          null,
+      },
     });
   } catch (error) {
     console.error(
@@ -264,7 +349,10 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ok: false,
-        error: "Webhook processing failed",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Webhook processing failed",
       },
       { status: 500 }
     );
