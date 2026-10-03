@@ -20,11 +20,6 @@ function normalizeText(value: string): string {
     .trim();
 }
 
-/**
- * Creates a stable fingerprint of the SHIPPING address.
- *
- * Customer name, phone and tags are intentionally NOT included.
- */
 function hashAddress(address: Address): string {
   const raw = [
     address.address1,
@@ -71,18 +66,6 @@ function getMetafield(
   );
 }
 
-/**
- * Protect important customer-entered unit information.
- *
- * Examples:
- * Flat 302
- * Shop 111
- * 1st Floor
- * Room 1202
- * A Wing
- * Tower 5
- * Block B
- */
 function hasCustomerDetailsPreserved(
   original: Address,
   proposed: Address
@@ -143,10 +126,6 @@ function hasCustomerDetailsPreserved(
   return true;
 }
 
-/**
- * Converts Google's postalAddress into Shopify's
- * structured shipping address.
- */
 function buildGoogleAddress(
   original: Address,
   googleResult: any
@@ -167,18 +146,13 @@ function buildGoogleAddress(
     return null;
   }
 
-  let address1 = googleLines[0];
+  const address1 = googleLines[0];
 
   let address2 =
     googleLines.length > 1
       ? googleLines.slice(1).join(", ")
       : "";
 
-  /**
-   * If the customer supplied address2 and Google
-   * did not include it, preserve it rather than
-   * silently deleting customer information.
-   */
   if (original.address2) {
     const combined = normalizeText(
       `${address1} ${address2}`
@@ -199,27 +173,20 @@ function buildGoogleAddress(
 
   return {
     address1,
-
     address2,
-
     city:
       postalAddress.locality ||
       original.city,
-
     province:
       postalAddress.administrativeArea ||
       original.province,
-
     provinceCode:
       original.provinceCode || "",
-
     zip:
       postalAddress.postalCode ||
       original.zip,
-
     country:
       original.country || "India",
-
     countryCode:
       postalAddress.regionCode ||
       original.countryCode ||
@@ -251,19 +218,15 @@ async function getShopifyToken() {
     `https://${shop}.myshopify.com/admin/oauth/access_token`,
     {
       method: "POST",
-
       headers: {
         "Content-Type":
           "application/x-www-form-urlencoded",
       },
-
       body: new URLSearchParams({
         grant_type:
           "client_credentials",
-
         client_id:
           clientId,
-
         client_secret:
           clientSecret,
       }).toString(),
@@ -307,15 +270,12 @@ async function shopifyGraphQL(
     `https://${shop}.myshopify.com/admin/api/2026-10/graphql.json`,
     {
       method: "POST",
-
       headers: {
         "Content-Type":
           "application/json",
-
         "X-Shopify-Access-Token":
           accessToken,
       },
-
       body: JSON.stringify({
         query,
         variables,
@@ -349,6 +309,36 @@ export async function POST(
   request: Request
 ) {
   try {
+    /*
+     * ==================================================
+     * INTERNAL PROCESSOR SECURITY
+     * ==================================================
+     *
+     * This endpoint must only be called by our
+     * verified Shopify webhook.
+     */
+
+    const internalSecret =
+      process.env.INTERNAL_PROCESSOR_SECRET;
+
+    const suppliedSecret =
+      request.headers.get(
+        "x-internal-processor-secret"
+      );
+
+    if (
+      !internalSecret ||
+      suppliedSecret !== internalSecret
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Unauthorized",
+        },
+        { status: 401 }
+      );
+    }
+
     const body =
       await request.json();
 
@@ -371,17 +361,21 @@ export async function POST(
       accessToken,
     } = await getShopifyToken();
 
-    // ==================================================
-    // ORDER QUERY
-    // ==================================================
+    /*
+     * ==================================================
+     * ORDER QUERY
+     * ==================================================
+     */
 
     const orderQuery = `
       query GetOrder($id: ID!) {
         order(id: $id) {
           id
           name
+
           cancelledAt
           cancelReason
+
           displayFulfillmentStatus
 
           shippingAddress {
@@ -422,9 +416,11 @@ export async function POST(
       }
     `;
 
-    // ==================================================
-    // 1. GET CURRENT ORDER
-    // ==================================================
+    /*
+     * ==================================================
+     * 1. GET CURRENT ORDER
+     * ==================================================
+     */
 
     const initialData =
       await shopifyGraphQL(
@@ -443,26 +439,23 @@ export async function POST(
       return NextResponse.json(
         {
           ok: false,
-          error:
-            "Order not found",
+          error: "Order not found",
         },
         { status: 404 }
       );
     }
 
-    // ==================================================
-    // 2. SAFETY GATES
-    // ==================================================
+    /*
+     * ==================================================
+     * 2. SAFETY GATES
+     * ==================================================
+     */
 
     if (order.cancelledAt) {
       return NextResponse.json({
         ok: true,
-
         decision: "STOP",
-
-        reason:
-          "ORDER_CANCELLED",
-
+        reason: "ORDER_CANCELLED",
         order: order.name,
       });
     }
@@ -473,14 +466,9 @@ export async function POST(
     ) {
       return NextResponse.json({
         ok: true,
-
         decision: "STOP",
-
-        reason:
-          "NOT_UNFULFILLED",
-
+        reason: "NOT_UNFULFILLED",
         order: order.name,
-
         fulfillmentStatus:
           order.displayFulfillmentStatus,
       });
@@ -489,19 +477,17 @@ export async function POST(
     if (!order.shippingAddress) {
       return NextResponse.json({
         ok: true,
-
         decision: "STOP",
-
-        reason:
-          "NO_SHIPPING_ADDRESS",
-
+        reason: "NO_SHIPPING_ADDRESS",
         order: order.name,
       });
     }
 
-    // ==================================================
-    // 3. CURRENT SHIPPING ADDRESS
-    // ==================================================
+    /*
+     * ==================================================
+     * 3. CURRENT SHIPPING ADDRESS
+     * ==================================================
+     */
 
     const currentAddress =
       makeAddress(
@@ -513,9 +499,11 @@ export async function POST(
         currentAddress
       );
 
-    // ==================================================
-    // 4. READ STORED STATE
-    // ==================================================
+    /*
+     * ==================================================
+     * 4. READ STORED STATE
+     * ==================================================
+     */
 
     const lastCheckedHash =
       getMetafield(
@@ -529,7 +517,13 @@ export async function POST(
         "validation_status"
       );
 
-    const checkCount =
+    const storedAttemptHash =
+      getMetafield(
+        order,
+        "attempt_hash"
+      );
+
+    const storedCheckCount =
       Number(
         getMetafield(
           order,
@@ -537,9 +531,11 @@ export async function POST(
         ) || "0"
       );
 
-    // ==================================================
-    // 5. SAME ADDRESS = SKIP
-    // ==================================================
+    /*
+     * ==================================================
+     * 5. SAME ADDRESS = SKIP
+     * ==================================================
+     */
 
     if (
       lastCheckedHash ===
@@ -547,44 +543,49 @@ export async function POST(
     ) {
       return NextResponse.json({
         ok: true,
-
         decision: "SKIP",
-
         reason:
           "ADDRESS_ALREADY_CHECKED",
-
         order: order.name,
-
         currentHash,
-
         validationStatus,
-
-        checkCount,
+        checkCount:
+          storedAttemptHash === currentHash
+            ? storedCheckCount
+            : 0,
       });
     }
 
-    // ==================================================
-    // 6. ATTEMPT CAP
-    // ==================================================
+    /*
+     * ==================================================
+     * 6. ATTEMPT COUNT
+     * ==================================================
+     *
+     * For Part 3 we keep the existing counter.
+     *
+     * The address-specific attempt reset will be added
+     * in Part 4.
+     */
+
+    const checkCount =
+      storedCheckCount;
 
     if (checkCount >= 3) {
       return NextResponse.json({
         ok: true,
-
         decision: "STOP",
-
         reason:
           "ATTEMPT_CAP_REACHED",
-
         order: order.name,
-
         checkCount,
       });
     }
 
-    // ==================================================
-    // 7. SEND ADDRESS TO GOOGLE
-    // ==================================================
+    /*
+     * ==================================================
+     * 7. SEND ADDRESS TO GOOGLE
+     * ==================================================
+     */
 
     const origin =
       new URL(
@@ -607,12 +608,10 @@ export async function POST(
         `${origin}/api/validate`,
         {
           method: "POST",
-
           headers: {
             "Content-Type":
               "application/json",
           },
-
           body: JSON.stringify({
             address:
               addressForGoogle,
@@ -626,9 +625,11 @@ export async function POST(
     const newCheckCount =
       checkCount + 1;
 
-    // ==================================================
-    // 8. GOOGLE DID NOT ACCEPT
-    // ==================================================
+    /*
+     * ==================================================
+     * 8. GOOGLE DID NOT ACCEPT
+     * ==================================================
+     */
 
     if (
       !googleResponse.ok ||
@@ -667,13 +668,10 @@ export async function POST(
                 {
                   namespace:
                     "aestlo_address",
-
                   key:
                     "last_checked_hash",
-
                   type:
                     "single_line_text_field",
-
                   value:
                     currentHash,
                 },
@@ -681,27 +679,20 @@ export async function POST(
                 {
                   namespace:
                     "aestlo_address",
-
                   key:
                     "validation_status",
-
                   type:
                     "single_line_text_field",
-
-                  value:
-                    "ISSUE",
+                  value: "ISSUE",
                 },
 
                 {
                   namespace:
                     "aestlo_address",
-
                   key:
                     "check_count",
-
                   type:
                     "number_integer",
-
                   value:
                     String(
                       newCheckCount
@@ -711,13 +702,10 @@ export async function POST(
                 {
                   namespace:
                     "aestlo_address",
-
                   key:
                     "original_address",
-
                   type:
                     "multi_line_text_field",
-
                   value:
                     addressForGoogle,
                 },
@@ -735,39 +723,33 @@ export async function POST(
         return NextResponse.json(
           {
             ok: false,
-
             error:
               "Could not save validation state",
-
             userErrors:
               saveErrors,
           },
-
           { status: 500 }
         );
       }
 
       return NextResponse.json({
         ok: true,
-
         decision: "ISSUE",
-
         reason:
           "GOOGLE_DID_NOT_ACCEPT",
-
         order: order.name,
-
         google:
           googleResult,
-
         checkCount:
           newCheckCount,
       });
     }
 
-    // ==================================================
-    // 9. BUILD STRUCTURED GOOGLE ADDRESS
-    // ==================================================
+    /*
+     * ==================================================
+     * 9. BUILD STRUCTURED GOOGLE ADDRESS
+     * ==================================================
+     */
 
     const proposedAddress =
       buildGoogleAddress(
@@ -778,19 +760,18 @@ export async function POST(
     if (!proposedAddress) {
       return NextResponse.json({
         ok: true,
-
         decision: "ISSUE",
-
         reason:
           "GOOGLE_STRUCTURED_ADDRESS_MISSING",
-
         order: order.name,
       });
     }
 
-    // ==================================================
-    // 10. CUSTOMER DETAIL SAFETY CHECK
-    // ==================================================
+    /*
+     * ==================================================
+     * 10. CUSTOMER DETAIL SAFETY CHECK
+     * ==================================================
+     */
 
     const customerDetailsPreserved =
       hasCustomerDetailsPreserved(
@@ -803,33 +784,32 @@ export async function POST(
     ) {
       return NextResponse.json({
         ok: true,
-
         decision: "ISSUE",
-
         reason:
           "CUSTOMER_UNIT_DETAILS_NOT_PRESERVED",
-
         order: order.name,
-
         originalAddress:
           currentAddress,
-
         proposedAddress,
       });
     }
 
-    // ==================================================
-    // 11. CALCULATE HASH OF THE FINAL VALIDATED ADDRESS
-    // ==================================================
+    /*
+     * ==================================================
+     * 11. FINAL VALIDATED HASH
+     * ==================================================
+     */
 
     const validatedHash =
       hashAddress(
         proposedAddress
       );
 
-    // ==================================================
-    // 12. FINAL RE-FETCH BEFORE WRITE
-    // ==================================================
+    /*
+     * ==================================================
+     * 12. FINAL RE-FETCH BEFORE WRITE
+     * ==================================================
+     */
 
     const finalData =
       await shopifyGraphQL(
@@ -847,46 +827,34 @@ export async function POST(
     if (!finalOrder) {
       return NextResponse.json({
         ok: true,
-
         decision: "STOP",
-
         reason:
           "ORDER_DISAPPEARED_BEFORE_WRITE",
       });
     }
 
-    // Order cancelled while Google
-    // was processing.
     if (
       finalOrder.cancelledAt
     ) {
       return NextResponse.json({
         ok: true,
-
         decision: "STOP",
-
         reason:
           "ORDER_CANCELLED_BEFORE_WRITE",
-
         cancelledAt:
           finalOrder.cancelledAt,
       });
     }
 
-    // Order fulfilled while Google
-    // was processing.
     if (
       finalOrder.displayFulfillmentStatus !==
       "UNFULFILLED"
     ) {
       return NextResponse.json({
         ok: true,
-
         decision: "STOP",
-
         reason:
           "ORDER_FULFILLED_BEFORE_WRITE",
-
         fulfillmentStatus:
           finalOrder.displayFulfillmentStatus,
       });
@@ -897,17 +865,17 @@ export async function POST(
     ) {
       return NextResponse.json({
         ok: true,
-
         decision: "STOP",
-
         reason:
           "SHIPPING_ADDRESS_MISSING_BEFORE_WRITE",
       });
     }
 
-    // ==================================================
-    // 13. MAKE SURE SHIPPING ADDRESS DID NOT CHANGE
-    // ==================================================
+    /*
+     * ==================================================
+     * 13. MAKE SURE SHIPPING ADDRESS DID NOT CHANGE
+     * ==================================================
+     */
 
     const finalCurrentAddress =
       makeAddress(
@@ -924,23 +892,21 @@ export async function POST(
     ) {
       return NextResponse.json({
         ok: true,
-
         decision: "STOP",
-
         reason:
           "ADDRESS_CHANGED_BEFORE_WRITE",
-
         originalHash:
           currentHash,
-
         currentShopifyHash:
           finalHash,
       });
     }
 
-    // ==================================================
-    // 14. UPDATE ONLY SHIPPING ADDRESS
-    // ==================================================
+    /*
+     * ==================================================
+     * 14. UPDATE ONLY SHIPPING ADDRESS
+     * ==================================================
+     */
 
     const updateMutation = `
       mutation UpdateOrder(
@@ -1006,16 +972,6 @@ export async function POST(
           input: {
             id: orderId,
 
-            /*
-             * IMPORTANT:
-             *
-             * ONLY shippingAddress is changed.
-             *
-             * billingAddress is NOT sent.
-             *
-             * tags are NOT sent.
-             */
-
             shippingAddress: {
               address1:
                 proposedAddress.address1,
@@ -1045,23 +1001,14 @@ export async function POST(
                 "IN",
             },
 
-            /*
-             * Save the HASH OF THE FINAL ADDRESS
-             * THAT WE ACTUALLY PUT INTO SHOPIFY.
-             *
-             * This is extremely important.
-             */
             metafields: [
               {
                 namespace:
                   "aestlo_address",
-
                 key:
                   "last_checked_hash",
-
                 type:
                   "single_line_text_field",
-
                 value:
                   validatedHash,
               },
@@ -1069,13 +1016,10 @@ export async function POST(
               {
                 namespace:
                   "aestlo_address",
-
                 key:
                   "validation_status",
-
                 type:
                   "single_line_text_field",
-
                 value:
                   "ACCEPTED",
               },
@@ -1083,13 +1027,10 @@ export async function POST(
               {
                 namespace:
                   "aestlo_address",
-
                 key:
                   "check_count",
-
                 type:
                   "number_integer",
-
                 value:
                   String(
                     newCheckCount
@@ -1099,13 +1040,10 @@ export async function POST(
               {
                 namespace:
                   "aestlo_address",
-
                 key:
                   "original_address",
-
                 type:
                   "multi_line_text_field",
-
                 value:
                   addressForGoogle,
               },
@@ -1113,13 +1051,10 @@ export async function POST(
               {
                 namespace:
                   "aestlo_address",
-
                 key:
                   "validated_address",
-
                 type:
                   "multi_line_text_field",
-
                 value:
                   validatedAddressText,
               },
@@ -1138,50 +1073,39 @@ export async function POST(
       return NextResponse.json(
         {
           ok: false,
-
           decision:
             "UPDATE_FAILED",
-
           userErrors:
             result.userErrors,
         },
-
         { status: 400 }
       );
     }
 
-    // ==================================================
-    // 15. SUCCESS
-    // ==================================================
+    /*
+     * ==================================================
+     * 15. SUCCESS
+     * ==================================================
+     */
 
     return NextResponse.json({
       ok: true,
-
       decision: "UPDATED",
-
       order:
         result?.order,
-
       originalAddress:
         currentAddress,
-
       proposedAddress,
-
       billingAddress:
         result?.order
           ?.billingAddress,
-
       tags:
         result?.order?.tags,
-
       google:
         googleResult,
-
       originalHash:
         currentHash,
-
       validatedHash,
-
       checkCount:
         newCheckCount,
     });
@@ -1194,13 +1118,11 @@ export async function POST(
     return NextResponse.json(
       {
         ok: false,
-
         error:
           error instanceof Error
             ? error.message
             : "Internal server error",
       },
-
       { status: 500 }
     );
   }
