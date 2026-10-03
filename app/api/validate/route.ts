@@ -28,7 +28,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const response = await fetch(
+    /*
+     * Send the original customer shipping address to Google.
+     * Google performs the actual address validation,
+     * formatting, correction and geographic processing.
+     */
+    const googleResponse = await fetch(
       `https://addressvalidation.googleapis.com/v1:validateAddress?key=${encodeURIComponent(
         apiKey
       )}`,
@@ -46,26 +51,82 @@ export async function POST(request: Request) {
       }
     );
 
-    const data = await response.json();
+    const googleData = await googleResponse.json();
 
-    if (!response.ok) {
-      console.error("Google Address Validation error:", data);
+    if (!googleResponse.ok) {
+      console.error("Google Address Validation error:", googleData);
 
       return NextResponse.json(
         {
           ok: false,
+          decision: "ISSUE",
+          originalAddress: address,
           error: "Google Address Validation request failed",
-          details: data,
+          details: googleData,
         },
-        { status: response.status }
+        { status: googleResponse.status }
       );
     }
 
+    const result = googleData.result || null;
+    const verdict = result?.verdict || null;
+    const validatedAddress = result?.address || null;
+    const geocode = result?.geocode || null;
+
+    const formattedAddress =
+      validatedAddress?.formattedAddress || null;
+
+    const possibleNextAction =
+      verdict?.possibleNextAction || null;
+
+    const addressComplete =
+      verdict?.addressComplete === true;
+
+    const validationGranularity =
+      verdict?.validationGranularity || null;
+
+    const geocodeGranularity =
+      verdict?.geocodeGranularity || null;
+
+    /*
+     * Conservative production rule:
+     *
+     * We only allow an automatic Shopify update when:
+     *
+     * 1. Google says ACCEPT
+     * 2. Google says the address is complete
+     * 3. Google returned a formatted address
+     * 4. Google returned a geographic result
+     *
+     * We do NOT invent missing information ourselves.
+     */
+    const safeToUpdate =
+      possibleNextAction === "ACCEPT" &&
+      addressComplete === true &&
+      !!formattedAddress &&
+      !!geocode?.location;
+
     return NextResponse.json({
       ok: true,
+
+      decision: safeToUpdate ? "ACCEPT" : "ISSUE",
+
       originalAddress: address,
-      result: data.result || null,
-      responseId: data.responseId || null,
+
+      finalAddress: safeToUpdate ? formattedAddress : null,
+
+      google: {
+        possibleNextAction,
+        addressComplete,
+        validationGranularity,
+        geocodeGranularity,
+        formattedAddress,
+        location: geocode?.location || null,
+        placeId: geocode?.placeId || null,
+      },
+
+      result,
+      responseId: googleData.responseId || null,
     });
   } catch (error) {
     console.error("Address validation error:", error);
@@ -73,6 +134,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ok: false,
+        decision: "ISSUE",
         error: "Internal server error",
       },
       { status: 500 }
