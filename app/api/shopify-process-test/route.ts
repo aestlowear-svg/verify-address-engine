@@ -173,19 +173,13 @@ export async function POST(request: Request) {
 
           tags
 
-          metafields(
-            identifiers: [
-              { namespace: "aestlo_address", key: "last_checked_hash" }
-              { namespace: "aestlo_address", key: "validation_status" }
-              { namespace: "aestlo_address", key: "check_count" }
-              { namespace: "aestlo_address", key: "original_address" }
-              { namespace: "aestlo_address", key: "validated_address" }
-            ]
-          ) {
-            namespace
-            key
-            value
-          }
+         metafields(first: 20, namespace: "aestlo_address") {
+  nodes {
+    namespace
+    key
+    value
+  }
+}
         }
       }
     `;
