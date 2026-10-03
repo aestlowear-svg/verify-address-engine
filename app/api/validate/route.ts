@@ -1,143 +1,142 @@
-import { NextResponse } from "next/server";
-
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-
-    const address = body.address;
-
-    if (!address || typeof address !== "string") {
-      return NextResponse.json(
+  "ok": true,
+  "decision": "ACCEPT",
+  "originalAddress": "Flat no 3202 A wing Ekta tripolis, Motilal nagar Goregaon west, Mumbai, Maharashtra, 400104, India",
+  "finalAddress": "Flat no 3202 A, wing Ekta, tripolis, Motilal Nagar I, Goregaon West, Mumbai, Maharashtra 400104, India",
+  "google": {
+    "possibleNextAction": "ACCEPT",
+    "addressComplete": true,
+    "validationGranularity": "PREMISE_PROXIMITY",
+    "geocodeGranularity": "PREMISE_PROXIMITY",
+    "formattedAddress": "Flat no 3202 A, wing Ekta, tripolis, Motilal Nagar I, Goregaon West, Mumbai, Maharashtra 400104, India",
+    "location": {
+      "latitude": 19.154787,
+      "longitude": 72.843231
+    },
+    "placeId": "ChIJCXp2GUm25zsRslub7Kl6jrE"
+  },
+  "result": {
+    "verdict": {
+      "inputGranularity": "SUB_PREMISE",
+      "validationGranularity": "PREMISE_PROXIMITY",
+      "geocodeGranularity": "PREMISE_PROXIMITY",
+      "addressComplete": true,
+      "hasUnconfirmedComponents": true,
+      "possibleNextAction": "ACCEPT"
+    },
+    "address": {
+      "formattedAddress": "Flat no 3202 A, wing Ekta, tripolis, Motilal Nagar I, Goregaon West, Mumbai, Maharashtra 400104, India",
+      "postalAddress": {
+        "regionCode": "IN",
+        "languageCode": "en",
+        "postalCode": "400104",
+        "administrativeArea": "Maharashtra",
+        "locality": "Mumbai",
+        "addressLines": [
+          "Flat no 3202 A, wing Ekta",
+          "tripolis, Motilal Nagar I, Goregaon West"
+        ]
+      },
+      "addressComponents": [
         {
-          ok: false,
-          error: "address is required",
-        },
-        { status: 400 }
-      );
-    }
-
-    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-
-    if (!apiKey) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "GOOGLE_MAPS_API_KEY is not configured",
-        },
-        { status: 500 }
-      );
-    }
-
-    /*
-     * Send the original customer shipping address to Google.
-     * Google performs the actual address validation,
-     * formatting, correction and geographic processing.
-     */
-    const googleResponse = await fetch(
-      `https://addressvalidation.googleapis.com/v1:validateAddress?key=${encodeURIComponent(
-        apiKey
-      )}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          address: {
-            regionCode: "IN",
-            addressLines: [address],
+          "componentName": {
+            "text": "Flat no 3202 A",
+            "languageCode": "en"
           },
-        }),
-      }
-    );
-
-    const googleData = await googleResponse.json();
-
-    if (!googleResponse.ok) {
-      console.error("Google Address Validation error:", googleData);
-
-      return NextResponse.json(
-        {
-          ok: false,
-          decision: "ISSUE",
-          originalAddress: address,
-          error: "Google Address Validation request failed",
-          details: googleData,
+          "componentType": "subpremise",
+          "confirmationLevel": "UNCONFIRMED_BUT_PLAUSIBLE"
         },
-        { status: googleResponse.status }
-      );
+        {
+          "componentName": {
+            "text": "wing Ekta",
+            "languageCode": "en"
+          },
+          "componentType": "premise",
+          "confirmationLevel": "UNCONFIRMED_BUT_PLAUSIBLE"
+        },
+        {
+          "componentName": {
+            "text": "tripolis"
+          },
+          "componentType": "street_number",
+          "confirmationLevel": "UNCONFIRMED_BUT_PLAUSIBLE"
+        },
+        {
+          "componentName": {
+            "text": "Motilal Nagar I",
+            "languageCode": "en"
+          },
+          "componentType": "sublocality_level_2",
+          "confirmationLevel": "CONFIRMED"
+        },
+        {
+          "componentName": {
+            "text": "Goregaon West",
+            "languageCode": "en"
+          },
+          "componentType": "sublocality_level_1",
+          "confirmationLevel": "CONFIRMED"
+        },
+        {
+          "componentName": {
+            "text": "Mumbai",
+            "languageCode": "en"
+          },
+          "componentType": "locality",
+          "confirmationLevel": "CONFIRMED"
+        },
+        {
+          "componentName": {
+            "text": "Maharashtra",
+            "languageCode": "en"
+          },
+          "componentType": "administrative_area_level_1",
+          "confirmationLevel": "CONFIRMED"
+        },
+        {
+          "componentName": {
+            "text": "400104"
+          },
+          "componentType": "postal_code",
+          "confirmationLevel": "CONFIRMED"
+        },
+        {
+          "componentName": {
+            "text": "India",
+            "languageCode": "en"
+          },
+          "componentType": "country",
+          "confirmationLevel": "CONFIRMED"
+        }
+      ],
+      "unconfirmedComponentTypes": [
+        "subpremise",
+        "premise",
+        "street_number"
+      ]
+    },
+    "geocode": {
+      "location": {
+        "latitude": 19.154787,
+        "longitude": 72.843231
+      },
+      "plusCode": {
+        "globalCode": "7JFJ5R3V+W7"
+      },
+      "bounds": {
+        "low": {
+          "latitude": 19.154787,
+          "longitude": 72.843231
+        },
+        "high": {
+          "latitude": 19.154787,
+          "longitude": 72.843231
+        }
+      },
+      "placeId": "ChIJCXp2GUm25zsRslub7Kl6jrE",
+      "placeTypes": [
+        "premise"
+      ]
     }
-
-    const result = googleData.result || null;
-    const verdict = result?.verdict || null;
-    const validatedAddress = result?.address || null;
-    const geocode = result?.geocode || null;
-
-    const formattedAddress =
-      validatedAddress?.formattedAddress || null;
-
-    const possibleNextAction =
-      verdict?.possibleNextAction || null;
-
-    const addressComplete =
-      verdict?.addressComplete === true;
-
-    const validationGranularity =
-      verdict?.validationGranularity || null;
-
-    const geocodeGranularity =
-      verdict?.geocodeGranularity || null;
-
-    /*
-     * Conservative production rule:
-     *
-     * We only allow an automatic Shopify update when:
-     *
-     * 1. Google says ACCEPT
-     * 2. Google says the address is complete
-     * 3. Google returned a formatted address
-     * 4. Google returned a geographic result
-     *
-     * We do NOT invent missing information ourselves.
-     */
-    const safeToUpdate =
-      possibleNextAction === "ACCEPT" &&
-      addressComplete === true &&
-      !!formattedAddress &&
-      !!geocode?.location;
-
-    return NextResponse.json({
-      ok: true,
-
-      decision: safeToUpdate ? "ACCEPT" : "ISSUE",
-
-      originalAddress: address,
-
-      finalAddress: safeToUpdate ? formattedAddress : null,
-
-      google: {
-        possibleNextAction,
-        addressComplete,
-        validationGranularity,
-        geocodeGranularity,
-        formattedAddress,
-        location: geocode?.location || null,
-        placeId: geocode?.placeId || null,
-      },
-
-      result,
-      responseId: googleData.responseId || null,
-    });
-  } catch (error) {
-    console.error("Address validation error:", error);
-
-    return NextResponse.json(
-      {
-        ok: false,
-        decision: "ISSUE",
-        error: "Internal server error",
-      },
-      { status: 500 }
-    );
-  }
+  },
+  "responseId": "02fd8ea4-1d5c-432e-87a7-3adfad3b042f"
 }
