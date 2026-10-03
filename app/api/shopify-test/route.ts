@@ -1,7 +1,43 @@
 import { NextResponse } from "next/server";
 
-export async function GET() {
+type AddressInput = {
+  address1: string;
+  address2?: string;
+  city: string;
+  province: string;
+  provinceCode?: string;
+  zip: string;
+  country: string;
+  countryCode?: string;
+};
+
+export async function POST(request: Request) {
   try {
+    const body = await request.json();
+
+    const orderId = body.orderId;
+    const address = body.address as AddressInput;
+
+    if (!orderId) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "orderId is required",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!address?.address1 || !address?.city || !address?.zip) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "address.address1, city and zip are required",
+        },
+        { status: 400 }
+      );
+    }
+
     const shop = process.env.SHOPIFY_SHOP;
     const clientId = process.env.SHOPIFY_CLIENT_ID;
     const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
@@ -11,15 +47,14 @@ export async function GET() {
         {
           ok: false,
           error: "Shopify environment variables are missing",
-          hasShop: !!shop,
-          hasClientId: !!clientId,
-          hasClientSecret: !!clientSecret,
         },
         { status: 500 }
       );
     }
 
-    // 1. Get Shopify access token
+    /*
+     * Get Shopify client-credentials access token.
+     */
     const tokenResponse = await fetch(
       `https://${shop}.myshopify.com/admin/oauth/access_token`,
       {
@@ -38,14 +73,12 @@ export async function GET() {
     const tokenData = await tokenResponse.json();
 
     if (!tokenResponse.ok || !tokenData.access_token) {
-      console.error("Shopify token error:", tokenData);
+      console.error("Shopify authentication error:", tokenData);
 
       return NextResponse.json(
         {
           ok: false,
-          step: "shopify_authentication",
-          error: "Could not get Shopify access token",
-          details: tokenData,
+          error: "Could not authenticate with Shopify",
         },
         { status: 500 }
       );
@@ -53,20 +86,21 @@ export async function GET() {
 
     const accessToken = tokenData.access_token;
 
-    // 2. Read recent Shopify orders
-    const query = `
-      query {
-        orders(
-          first: 5,
-          sortKey: CREATED_AT,
-          reverse: true
-        ) {
-          nodes {
+    /*
+     * Update ONLY the shipping address.
+     *
+     * We intentionally do NOT send:
+     * - billingAddress
+     * - tags
+     *
+     * Therefore existing billing information and tags are left untouched.
+     */
+    const mutation = `
+      mutation UpdateOrder($input: OrderInput!) {
+        orderUpdate(input: $input) {
+          order {
             id
             name
-            createdAt
-            displayFinancialStatus
-            displayFulfillmentStatus
             shippingAddress {
               address1
               address2
@@ -77,10 +111,41 @@ export async function GET() {
               country
               countryCodeV2
             }
+            billingAddress {
+              address1
+              address2
+              city
+              province
+              provinceCode
+              zip
+              country
+              countryCodeV2
+            }
+            tags
+          }
+          userErrors {
+            field
+            message
           }
         }
       }
     `;
+
+    const variables = {
+      input: {
+        id: orderId,
+        shippingAddress: {
+          address1: address.address1,
+          address2: address.address2 || null,
+          city: address.city,
+          province: address.province,
+          provinceCode: address.provinceCode || null,
+          zip: address.zip,
+          country: address.country,
+          countryCode: address.countryCode || "IN",
+        },
+      },
+    };
 
     const shopifyResponse = await fetch(
       `https://${shop}.myshopify.com/admin/api/2026-10/graphql.json`,
@@ -91,7 +156,8 @@ export async function GET() {
           "X-Shopify-Access-Token": accessToken,
         },
         body: JSON.stringify({
-          query,
+          query: mutation,
+          variables,
         }),
       }
     );
@@ -104,7 +170,6 @@ export async function GET() {
       return NextResponse.json(
         {
           ok: false,
-          step: "shopify_graphql",
           error: "Shopify GraphQL request failed",
           details: shopifyData.errors || shopifyData,
         },
@@ -112,15 +177,36 @@ export async function GET() {
       );
     }
 
-    // Never return the access token.
+    const result = shopifyData.data?.orderUpdate;
+
+    if (!result) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Shopify did not return an orderUpdate result",
+        },
+        { status: 500 }
+      );
+    }
+
+    if (result.userErrors?.length) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Shopify rejected the address update",
+          userErrors: result.userErrors,
+        },
+        { status: 400 }
+      );
+    }
+
     return NextResponse.json({
       ok: true,
-      shop: `${shop}.myshopify.com`,
-      authenticated: true,
-      orders: shopifyData.data?.orders?.nodes || [],
+      updated: true,
+      order: result.order,
     });
   } catch (error) {
-    console.error("Shopify test error:", error);
+    console.error("Shopify update test error:", error);
 
     return NextResponse.json(
       {
