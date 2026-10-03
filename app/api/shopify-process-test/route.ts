@@ -311,11 +311,8 @@ export async function POST(
   try {
     /*
      * ==================================================
-     * INTERNAL PROCESSOR SECURITY
+     * 0. INTERNAL PROCESSOR SECURITY
      * ==================================================
-     *
-     * This endpoint must only be called by our
-     * verified Shopify webhook.
      */
 
     const internalSecret =
@@ -558,17 +555,20 @@ export async function POST(
 
     /*
      * ==================================================
-     * 6. ATTEMPT COUNT
+     * 6. ADDRESS-SPECIFIC ATTEMPT COUNT
      * ==================================================
      *
-     * For Part 3 we keep the existing counter.
+     * The 3-attempt limit belongs to the current
+     * shipping address hash.
      *
-     * The address-specific attempt reset will be added
-     * in Part 4.
+     * If the address changes, the hash changes and
+     * the attempt count starts again from zero.
      */
 
     const checkCount =
-      storedCheckCount;
+      storedAttemptHash === currentHash
+        ? storedCheckCount
+        : 0;
 
     if (checkCount >= 3) {
       return NextResponse.json({
@@ -578,6 +578,7 @@ export async function POST(
           "ATTEMPT_CAP_REACHED",
         order: order.name,
         checkCount,
+        currentHash,
       });
     }
 
@@ -629,6 +630,11 @@ export async function POST(
      * ==================================================
      * 8. GOOGLE DID NOT ACCEPT
      * ==================================================
+     *
+     * Before saving ISSUE, re-fetch Shopify.
+     *
+     * If the address changed while Google was working,
+     * discard the old result completely.
      */
 
     if (
@@ -636,6 +642,102 @@ export async function POST(
       googleResult.decision !==
         "ACCEPT"
     ) {
+      const issueFinalData =
+        await shopifyGraphQL(
+          shop,
+          accessToken,
+          orderQuery,
+          {
+            id: orderId,
+          }
+        );
+
+      const issueFinalOrder =
+        issueFinalData.data?.order;
+
+      if (!issueFinalOrder) {
+        return NextResponse.json({
+          ok: true,
+          decision: "STOP",
+          reason:
+            "ORDER_DISAPPEARED_BEFORE_ISSUE_SAVE",
+        });
+      }
+
+      if (
+        issueFinalOrder.cancelledAt
+      ) {
+        return NextResponse.json({
+          ok: true,
+          decision: "STOP",
+          reason:
+            "ORDER_CANCELLED_BEFORE_ISSUE_SAVE",
+        });
+      }
+
+      if (
+        issueFinalOrder.displayFulfillmentStatus !==
+        "UNFULFILLED"
+      ) {
+        return NextResponse.json({
+          ok: true,
+          decision: "STOP",
+          reason:
+            "ORDER_FULFILLED_BEFORE_ISSUE_SAVE",
+          fulfillmentStatus:
+            issueFinalOrder.displayFulfillmentStatus,
+        });
+      }
+
+      if (
+        !issueFinalOrder.shippingAddress
+      ) {
+        return NextResponse.json({
+          ok: true,
+          decision: "STOP",
+          reason:
+            "SHIPPING_ADDRESS_MISSING_BEFORE_ISSUE_SAVE",
+        });
+      }
+
+      const issueFinalAddress =
+        makeAddress(
+          issueFinalOrder.shippingAddress
+        );
+
+      const issueFinalHash =
+        hashAddress(
+          issueFinalAddress
+        );
+
+      /*
+       * Customer/admin changed the address while
+       * Google was processing.
+       *
+       * Do not save the old result.
+       */
+
+      if (
+        issueFinalHash !== currentHash
+      ) {
+        return NextResponse.json({
+          ok: true,
+          decision: "STOP",
+          reason:
+            "ADDRESS_CHANGED_BEFORE_ISSUE_SAVE",
+          originalHash:
+            currentHash,
+          currentShopifyHash:
+            issueFinalHash,
+        });
+      }
+
+      /*
+       * Save ISSUE only after confirming that the
+       * current Shopify address is still the address
+       * that was validated.
+       */
+
       const saveIssueMutation = `
         mutation SaveCheck(
           $input: OrderInput!
@@ -645,6 +747,8 @@ export async function POST(
           ) {
             order {
               id
+              name
+              tags
             }
 
             userErrors {
@@ -668,10 +772,13 @@ export async function POST(
                 {
                   namespace:
                     "aestlo_address",
+
                   key:
                     "last_checked_hash",
+
                   type:
                     "single_line_text_field",
+
                   value:
                     currentHash,
                 },
@@ -679,20 +786,41 @@ export async function POST(
                 {
                   namespace:
                     "aestlo_address",
+
                   key:
-                    "validation_status",
+                    "attempt_hash",
+
                   type:
                     "single_line_text_field",
-                  value: "ISSUE",
+
+                  value:
+                    currentHash,
                 },
 
                 {
                   namespace:
                     "aestlo_address",
+
+                  key:
+                    "validation_status",
+
+                  type:
+                    "single_line_text_field",
+
+                  value:
+                    "ISSUE",
+                },
+
+                {
+                  namespace:
+                    "aestlo_address",
+
                   key:
                     "check_count",
+
                   type:
                     "number_integer",
+
                   value:
                     String(
                       newCheckCount
@@ -702,10 +830,13 @@ export async function POST(
                 {
                   namespace:
                     "aestlo_address",
+
                   key:
                     "original_address",
+
                   type:
                     "multi_line_text_field",
+
                   value:
                     addressForGoogle,
                 },
@@ -737,11 +868,13 @@ export async function POST(
         decision: "ISSUE",
         reason:
           "GOOGLE_DID_NOT_ACCEPT",
-        order: order.name,
+        order:
+          issueFinalOrder.name,
         google:
           googleResult,
         checkCount:
           newCheckCount,
+        currentHash,
       });
     }
 
@@ -796,7 +929,7 @@ export async function POST(
 
     /*
      * ==================================================
-     * 11. FINAL VALIDATED HASH
+     * 11. HASH FINAL VALIDATED ADDRESS
      * ==================================================
      */
 
@@ -873,7 +1006,7 @@ export async function POST(
 
     /*
      * ==================================================
-     * 13. MAKE SURE SHIPPING ADDRESS DID NOT CHANGE
+     * 13. ADDRESS MUST STILL BE THE SAME
      * ==================================================
      */
 
@@ -972,6 +1105,13 @@ export async function POST(
           input: {
             id: orderId,
 
+            /*
+             * ONLY SHIPPING ADDRESS IS UPDATED.
+             *
+             * Billing address is NOT sent.
+             * Tags are NOT sent.
+             */
+
             shippingAddress: {
               address1:
                 proposedAddress.address1,
@@ -1001,14 +1141,22 @@ export async function POST(
                 "IN",
             },
 
+            /*
+             * Save the state of the address that
+             * was actually written to Shopify.
+             */
+
             metafields: [
               {
                 namespace:
                   "aestlo_address",
+
                 key:
                   "last_checked_hash",
+
                 type:
                   "single_line_text_field",
+
                 value:
                   validatedHash,
               },
@@ -1016,10 +1164,27 @@ export async function POST(
               {
                 namespace:
                   "aestlo_address",
+
                 key:
-                  "validation_status",
+                  "attempt_hash",
+
                 type:
                   "single_line_text_field",
+
+                value:
+                  validatedHash,
+              },
+
+              {
+                namespace:
+                  "aestlo_address",
+
+                key:
+                  "validation_status",
+
+                type:
+                  "single_line_text_field",
+
                 value:
                   "ACCEPTED",
               },
@@ -1027,10 +1192,13 @@ export async function POST(
               {
                 namespace:
                   "aestlo_address",
+
                 key:
                   "check_count",
+
                 type:
                   "number_integer",
+
                 value:
                   String(
                     newCheckCount
@@ -1040,10 +1208,13 @@ export async function POST(
               {
                 namespace:
                   "aestlo_address",
+
                 key:
                   "original_address",
+
                 type:
                   "multi_line_text_field",
+
                 value:
                   addressForGoogle,
               },
@@ -1051,10 +1222,13 @@ export async function POST(
               {
                 namespace:
                   "aestlo_address",
+
                 key:
                   "validated_address",
+
                 type:
                   "multi_line_text_field",
+
                 value:
                   validatedAddressText,
               },
@@ -1111,7 +1285,7 @@ export async function POST(
     });
   } catch (error) {
     console.error(
-      "Shopify process test error:",
+      "Shopify address processor error:",
       error
     );
 
